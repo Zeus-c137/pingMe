@@ -387,6 +387,7 @@
   function classify(status){
     if(status==='timeout') return {cls:'crit', ok:false, label:'TIMEOUT'};
     if(status==='neterr') return {cls:'crit', ok:false, label:'NO ROUTE'};
+    if(status==='blocked') return {cls:'crit', ok:false, label:'BLOCKED'};
     if(status>=200 && status<300) return {cls:'ok', ok:true, label:String(status)};
     if(status>=300 && status<400) return {cls:'warn', ok:true, label:String(status)};
     return {cls:'err', ok:false, label:String(status)};
@@ -437,52 +438,83 @@
     while(stripInner.children.length > 60) stripInner.removeChild(stripInner.firstChild);
   }
 
-  function withTimeout(promise, ms){
-    return new Promise((resolve,reject)=>{
-      const t = setTimeout(()=>reject(new Error('timeout')), ms);
-      promise.then(v=>{clearTimeout(t);resolve(v);}, e=>{clearTimeout(t);reject(e);});
-    });
-  }
+  // Render (and similar) free-tier instances cold-start from sleep in
+  // 20-50s+, so timeouts need real headroom or a sleeping service just
+  // looks identical to a dead one.
+  const DIRECT_TIMEOUT = 20000;
+  const PROXY_TIMEOUT  = 25000;
+  let pinging = false;
 
   async function directPing(url){
     const ctrl = new AbortController();
-    const t = setTimeout(()=>ctrl.abort(), 6000);
+    const t = setTimeout(()=>ctrl.abort(), DIRECT_TIMEOUT);
     const t0 = performance.now();
-    const res = await fetch(url, {mode:'cors', cache:'no-store', signal: ctrl.signal});
-    clearTimeout(t);
-    return {status: res.status, latency: Math.round(performance.now()-t0)};
+    try{
+      const res = await fetch(url, {mode:'cors', cache:'no-store', signal: ctrl.signal});
+      return {status: res.status, latency: Math.round(performance.now()-t0)};
+    } finally { clearTimeout(t); }
   }
 
-  async function proxyPing(url){
+  // Two public proxy fallbacks, tried in order, since any single free
+  // CORS-proxy service can be down, rate-limited, or blocked on a given
+  // network. Each is logged separately so failures are diagnosable.
+  async function proxyAllorigins(url, ctrl){
     const t0 = performance.now();
-    const res = await withTimeout(
-      fetch('https://api.allorigins.win/get?url=' + encodeURIComponent(url), {cache:'no-store'}),
-      10000
-    );
+    const res = await fetch('https://api.allorigins.win/get?url=' + encodeURIComponent(url),
+      {cache:'no-store', signal: ctrl.signal});
+    if(!res.ok) throw new Error('allorigins http '+res.status);
     const data = await res.json();
     const latency = Math.round(performance.now()-t0);
     const code = data && data.status && data.status.http_code;
-    if(!code) throw new Error('no status');
+    if(!code) throw new Error('allorigins: no status in payload');
     return {status: code, latency};
   }
 
+  async function proxyCorsProxyIo(url, ctrl){
+    const t0 = performance.now();
+    const res = await fetch('https://corsproxy.io/?url=' + encodeURIComponent(url),
+      {cache:'no-store', signal: ctrl.signal});
+    const latency = Math.round(performance.now()-t0);
+    return {status: res.status, latency};
+  }
+
+  async function proxyPing(url){
+    const ctrl = new AbortController();
+    const t = setTimeout(()=>ctrl.abort(), PROXY_TIMEOUT);
+    try{
+      try{
+        return await proxyAllorigins(url, ctrl);
+      }catch(e1){
+        console.warn('[ping] allorigins failed:', e1.message || e1);
+        return await proxyCorsProxyIo(url, ctrl);
+      }
+    } finally { clearTimeout(t); }
+  }
+
   async function doPing(){
+    if(pinging) return; // don't stack overlapping requests on short intervals
     let url = urlInput.value.trim();
     if(!url){ subreadout.textContent = 'no url'; return; }
     if(!/^https?:\/\//i.test(url)) url = 'https://' + url;
 
+    pinging = true;
     try{
       const r = await directPing(url);
       flash(r.status, r.latency, 'direct');
       return;
-    }catch(e){ /* fall through to proxy */ }
+    }catch(e){
+      console.warn('[ping] direct fetch failed (expected if target has no CORS header):', e.name, e.message || e);
+    } finally { /* keep pinging=true until proxy path also resolves */ }
 
     try{
       const r = await proxyPing(url);
       flash(r.status, r.latency, 'proxy');
-      return;
     }catch(e){
-      flash('neterr', null, null);
+      console.error('[ping] proxy fallback also failed:', e.name, e.message || e);
+      const label = (e.name === 'AbortError') ? 'timeout' : 'neterr';
+      flash(label, null, null);
+    } finally {
+      pinging = false;
     }
   }
 

@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ping</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#05070a;
+    --bg2:#0b0f14;
+    --line:#1b232b;
+    --dim:#4a5a63;
+    --fg:#e7edf0;
+    --accent:#4dd8e8;
+    --ok:#63e6a3;
+    --warn:#ffb454;
+    --err:#ff5a5a;
+    --crit:#ff2d6a;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--fg);
+    font-family:'IBM Plex Mono',ui-monospace,monospace;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    min-height:100dvh;
+    padding:
+      max(20px, env(safe-area-inset-top,0px))
+      20px
+      max(20px, env(safe-area-inset-bottom,0px));
+    overflow:hidden;
+    user-select:none;
+    position:relative;
+    background-image:
+      linear-gradient(var(--bg2) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg2) 1px, transparent 1px);
+    background-size:34px 34px;
+    background-position:center;
+  }
+  body::before{
+    content:'';
+    position:absolute;inset:0;
+    background:radial-gradient(circle at 50% 46%, transparent 0%, var(--bg) 72%);
+    pointer-events:none;
+  }
+
+  .corner{
+    position:fixed;
+    top:calc(14px + env(safe-area-inset-top,0px));
+    font-size:11px;
+    color:var(--dim);
+    letter-spacing:.5px;
+    font-variant-numeric:tabular-nums;
+    display:flex;
+    align-items:baseline;
+    gap:4px;
+  }
+  .corner b{color:var(--fg);font-size:15px;font-weight:600;}
+  #uptime{left:18px;}
+  #count{right:18px;}
+
+  .stage{
+    position:relative;
+    z-index:1;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:clamp(18px,3.6vh,34px);
+    width:100%;
+    max-width:480px;
+  }
+
+  /* ---------- dial ---------- */
+  .dial-wrap{
+    position:relative;
+    width:min(66vw,300px);
+    aspect-ratio:1;
+  }
+  .sweep{
+    position:absolute;inset:-6%;
+    border-radius:50%;
+    background:conic-gradient(from 0deg, rgba(77,216,232,.22), transparent 28%, transparent 100%);
+    opacity:0;
+    transition:opacity .4s;
+    animation:spin 3.2s linear infinite;
+  }
+  .running .sweep{opacity:1;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  @media (prefers-reduced-motion:reduce){ .sweep{animation:none;} }
+
+  svg{width:100%;height:100%;display:block;overflow:visible;position:relative;}
+  .track{fill:none;stroke:var(--line);stroke-width:2;}
+  .ring{
+    fill:none;
+    stroke:var(--dim);
+    stroke-width:3;
+    stroke-linecap:round;
+    transform-origin:150px 150px;
+    transform:rotate(-90deg);
+    transition:stroke .25s;
+  }
+  .ring.live{stroke:var(--accent);}
+  .ring.ok{stroke:var(--ok);}
+  .ring.warn{stroke:var(--warn);}
+  .ring.err{stroke:var(--err);}
+  .ring.crit{stroke:var(--crit);}
+
+  .minor{stroke:var(--line);stroke-width:1;}
+  .tick{stroke:var(--line);stroke-width:2;}
+  .tick.active{stroke:var(--fg);}
+  .ticklabel{
+    fill:var(--dim);
+    font-family:'IBM Plex Mono',monospace;
+    font-size:9px;
+    text-anchor:middle;
+  }
+  .ticklabel.active{fill:var(--accent);}
+
+  .drag-zone{fill:transparent;cursor:grab;touch-action:none;}
+  .drag-zone:active{cursor:grabbing;}
+
+  .center-btn{
+    fill:var(--bg2);
+    stroke:var(--line);
+    stroke-width:1.5;
+    cursor:pointer;
+    transition:stroke .2s,fill .2s;
+  }
+  .center-btn:hover{stroke:var(--dim);}
+  .center-group.running .center-btn{stroke:var(--accent);}
+
+  .readout{
+    fill:var(--fg);
+    font-family:'IBM Plex Mono',monospace;
+    font-size:30px;
+    font-weight:600;
+    text-anchor:middle;
+    dominant-baseline:central;
+    letter-spacing:.5px;
+    font-variant-numeric:tabular-nums;
+  }
+  .readout.ok{fill:var(--ok);}
+  .readout.warn{fill:var(--warn);}
+  .readout.err{fill:var(--err);}
+  .readout.crit{fill:var(--crit);}
+  .subreadout{
+    fill:var(--dim);
+    font-size:11px;
+    text-anchor:middle;
+    dominant-baseline:central;
+    letter-spacing:1px;
+    font-variant-numeric:tabular-nums;
+  }
+  .method{fill:none;stroke:var(--line);stroke-width:1.5;transition:stroke .2s,fill .2s;}
+  .method.direct{stroke:var(--accent);fill:var(--accent);}
+  .method.proxy{stroke:var(--dim);fill:none;}
+
+  @keyframes breathe{
+    0%,100%{opacity:.35;}
+    50%{opacity:.9;}
+  }
+  .pulse-dot{fill:var(--dim);transition:fill .2s;}
+  .running .pulse-dot{fill:var(--accent);animation:breathe 1.6s ease-in-out infinite;}
+  @media (prefers-reduced-motion:reduce){ .running .pulse-dot{animation:none;opacity:.8;} }
+
+  /* ---------- url line ---------- */
+  .urlline{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    width:100%;
+    border-bottom:1px solid var(--line);
+    padding-bottom:10px;
+    transition:border-color .2s;
+  }
+  .urlline:focus-within{border-color:var(--accent);}
+  .urlline span{color:var(--dim);font-size:14px;}
+  input[type=text]{
+    flex:1;
+    background:none;
+    border:none;
+    outline:none;
+    color:var(--fg);
+    font-family:'IBM Plex Mono',monospace;
+    font-size:14px;
+    caret-color:var(--accent);
+    min-width:0;
+  }
+  input[type=text]::placeholder{color:var(--dim);}
+
+  /* ---------- history bars (status + latency) ---------- */
+  .strip{
+    width:100%;
+    height:46px;
+    display:flex;
+    align-items:flex-end;
+    gap:5px;
+    overflow-x:hidden;
+    direction:rtl;
+    border-bottom:1px solid var(--line);
+  }
+  .strip > div{direction:ltr;display:flex;align-items:flex-end;gap:5px;height:100%;}
+  .bar{
+    flex:none;
+    width:4px;
+    min-height:3px;
+    border-radius:1px 1px 0 0;
+    background:var(--line);
+    transform:scaleY(0);
+    transform-origin:bottom;
+    animation:grow .3s ease forwards;
+  }
+  .bar.ok{background:var(--ok);}
+  .bar.warn{background:var(--warn);}
+  .bar.err{background:var(--err);}
+  .bar.crit{background:var(--crit);}
+  @keyframes grow{to{transform:scaleY(1);}}
+  @media (prefers-reduced-motion:reduce){ .bar{animation:none;transform:scaleY(1);} }
+</style>
+</head>
+<body>
+
+<div class="corner" id="uptime"><b>—</b><span>%</span></div>
+<div class="corner" id="count"><b>0</b><span>req</span></div>
+
+<div class="stage">
+
+  <div class="dial-wrap" id="dialWrap">
+    <div class="sweep"></div>
+    <svg viewBox="0 0 300 300">
+      <circle class="track" cx="150" cy="150" r="124"></circle>
+      <circle class="ring" id="ring" cx="150" cy="150" r="124"
+              stroke-dasharray="779.1" stroke-dashoffset="779.1"></circle>
+
+      <g id="minors"></g>
+      <g id="ticks"></g>
+
+      <circle class="drag-zone" cx="150" cy="150" r="150" id="dragzone" tabindex="0"
+              role="slider" aria-label="ping interval" aria-valuemin="0" aria-valuemax="7"></circle>
+
+      <g class="center-group" id="centerGroup">
+        <circle class="center-btn" cx="150" cy="150" r="86" id="centerBtn"
+                role="button" aria-label="start or stop monitoring"></circle>
+        <circle class="pulse-dot" cx="150" cy="106" r="3.5"></circle>
+        <text class="readout" id="readout" x="150" y="147">5m</text>
+        <text class="subreadout" id="subreadout" x="150" y="175">idle</text>
+        <circle class="method" id="methodDot" cx="150" cy="196" r="3"></circle>
+      </g>
+    </svg>
+  </div>
+
+  <label class="urlline">
+    <span>&gt;</span>
+    <input id="url" type="text" placeholder="https://" inputmode="url" autocapitalize="off" autocorrect="off" spellcheck="false">
+  </label>
+
+  <div class="strip"><div id="stripInner"></div></div>
+
+</div>
+
+<script>
+(function(){
+  const PRESETS = [
+    {l:'10s', ms:10000},
+    {l:'30s', ms:30000},
+    {l:'1m',  ms:60000},
+    {l:'2m',  ms:120000},
+    {l:'5m',  ms:300000},
+    {l:'10m', ms:600000},
+    {l:'30m', ms:1800000},
+    {l:'1h',  ms:3600000},
+  ];
+  const CIRC = 2*Math.PI*124;
+  const LAT_CAP = 2500; // ms, for bar scaling
+
+  const ring = document.getElementById('ring');
+  const readout = document.getElementById('readout');
+  const subreadout = document.getElementById('subreadout');
+  const methodDot = document.getElementById('methodDot');
+  const centerBtn = document.getElementById('centerBtn');
+  const centerGroup = document.getElementById('centerGroup');
+  const dialWrap = document.getElementById('dialWrap');
+  const dragZone = document.getElementById('dragzone');
+  const ticksG = document.getElementById('ticks');
+  const minorsG = document.getElementById('minors');
+  const stripInner = document.getElementById('stripInner');
+  const urlInput = document.getElementById('url');
+  const uptimeEl = document.querySelector('#uptime b');
+  const countEl = document.querySelector('#count b');
+
+  ring.setAttribute('stroke-dasharray', CIRC);
+
+  let presetIdx = 4; // 5m default
+  let running = false;
+  let rafId = null;
+  let timeoutId = null;
+  let cycleStart = 0;
+  let flashTimer = null;
+  let currentlyFlashing = false;
+  let history = []; // {ok:bool, latency:number|null}
+
+  // major preset ticks + labels
+  PRESETS.forEach((p,i)=>{
+    const ang = (i*45 - 90) * Math.PI/180;
+    const r1 = 138, r2 = 148, rl = 162;
+    const x1 = 150+r1*Math.cos(ang), y1 = 150+r1*Math.sin(ang);
+    const x2 = 150+r2*Math.cos(ang), y2 = 150+r2*Math.sin(ang);
+    const xl = 150+rl*Math.cos(ang), yl = 150+rl*Math.sin(ang);
+    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('x1',x1);line.setAttribute('y1',y1);
+    line.setAttribute('x2',x2);line.setAttribute('y2',y2);
+    line.setAttribute('class','tick');
+    line.dataset.idx = i;
+    const text = document.createElementNS('http://www.w3.org/2000/svg','text');
+    text.setAttribute('x',xl);text.setAttribute('y',yl);
+    text.setAttribute('class','ticklabel');
+    text.dataset.idx = i;
+    text.textContent = p.l;
+    ticksG.appendChild(line);
+    ticksG.appendChild(text);
+  });
+  // minor ticks (3 per sector) for texture
+  for(let i=0;i<32;i++){
+    if(i%4===0) continue;
+    const ang = (i*11.25 - 90) * Math.PI/180;
+    const r1 = 132, r2 = 138;
+    const x1 = 150+r1*Math.cos(ang), y1 = 150+r1*Math.sin(ang);
+    const x2 = 150+r2*Math.cos(ang), y2 = 150+r2*Math.sin(ang);
+    const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('x1',x1);line.setAttribute('y1',y1);
+    line.setAttribute('x2',x2);line.setAttribute('y2',y2);
+    line.setAttribute('class','minor');
+    minorsG.appendChild(line);
+  }
+
+  function paintTicks(){
+    ticksG.querySelectorAll('.tick,.ticklabel').forEach(el=>{
+      el.classList.toggle('active', Number(el.dataset.idx)===presetIdx);
+    });
+  }
+
+  function setPreset(i, fromDrag){
+    presetIdx = ((i%8)+8)%8;
+    if(!currentlyFlashing) readout.textContent = PRESETS[presetIdx].l;
+    paintTicks();
+    dragZone.setAttribute('aria-valuenow', presetIdx);
+    dragZone.setAttribute('aria-valuetext', PRESETS[presetIdx].l);
+    if(running && fromDrag) armCycle();
+  }
+
+  function angleFromEvent(e){
+    const rect = dragZone.getBoundingClientRect();
+    const cx = rect.left + rect.width/2;
+    const cy = rect.top + rect.height/2;
+    const px = (e.touches? e.touches[0].clientX : e.clientX) - cx;
+    const py = (e.touches? e.touches[0].clientY : e.clientY) - cy;
+    let deg = Math.atan2(px, -py) * 180/Math.PI;
+    if(deg<0) deg += 360;
+    return deg;
+  }
+
+  let dragging = false;
+  function startDrag(e){ dragging = true; onDrag(e); e.preventDefault(); }
+  function onDrag(e){
+    if(!dragging) return;
+    const deg = angleFromEvent(e);
+    const idx = Math.round(deg/45) % 8;
+    setPreset(idx, true);
+  }
+  function endDrag(){ dragging = false; }
+  dragZone.addEventListener('pointerdown', startDrag);
+  window.addEventListener('pointermove', onDrag);
+  window.addEventListener('pointerup', endDrag);
+  dragZone.addEventListener('keydown', (e)=>{
+    if(e.key==='ArrowRight'||e.key==='ArrowUp'){ setPreset(presetIdx+1,true); e.preventDefault(); }
+    if(e.key==='ArrowLeft'||e.key==='ArrowDown'){ setPreset(presetIdx-1,true); e.preventDefault(); }
+  });
+
+  function classify(status){
+    if(status==='timeout') return {cls:'crit', ok:false, label:'TIMEOUT'};
+    if(status==='neterr') return {cls:'crit', ok:false, label:'NO ROUTE'};
+    if(status>=200 && status<300) return {cls:'ok', ok:true, label:String(status)};
+    if(status>=300 && status<400) return {cls:'warn', ok:true, label:String(status)};
+    return {cls:'err', ok:false, label:String(status)};
+  }
+
+  function updateCorners(){
+    countEl.textContent = history.length;
+    if(!history.length){ uptimeEl.textContent = '—'; return; }
+    const win = history.slice(-50);
+    const up = win.filter(h=>h.ok).length;
+    uptimeEl.textContent = Math.round(up/win.length*100);
+  }
+
+  function flash(status, latency, method){
+    const c = classify(status);
+    currentlyFlashing = true;
+    ring.classList.remove('ok','warn','err','crit');
+    readout.classList.remove('ok','warn','err','crit');
+    ring.classList.add(c.cls);
+    readout.classList.add(c.cls);
+    readout.textContent = c.label;
+    subreadout.textContent = latency!=null ? latency+'ms' : '—';
+    methodDot.classList.remove('direct','proxy');
+    if(method) methodDot.classList.add(method);
+
+    history.push({ok:c.ok, latency});
+    if(history.length>200) history.shift();
+    updateCorners();
+    addBar(c.cls, latency);
+
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(()=>{
+      currentlyFlashing = false;
+      ring.classList.remove('ok','warn','err','crit');
+      readout.classList.remove('ok','warn','err','crit');
+      readout.textContent = PRESETS[presetIdx].l;
+      if(running) subreadout.textContent = '';
+    }, 1400);
+  }
+
+  function addBar(cls, latency){
+    const d = document.createElement('div');
+    d.className = 'bar ' + cls;
+    const h = latency!=null ? Math.max(8, Math.min(100, (latency/LAT_CAP)*100)) : 100;
+    d.style.height = h + '%';
+    d.title = (latency!=null ? latency+'ms' : 'no response');
+    stripInner.appendChild(d);
+    while(stripInner.children.length > 60) stripInner.removeChild(stripInner.firstChild);
+  }
+
+  function withTimeout(promise, ms){
+    return new Promise((resolve,reject)=>{
+      const t = setTimeout(()=>reject(new Error('timeout')), ms);
+      promise.then(v=>{clearTimeout(t);resolve(v);}, e=>{clearTimeout(t);reject(e);});
+    });
+  }
+
+  async function directPing(url){
+    const ctrl = new AbortController();
+    const t = setTimeout(()=>ctrl.abort(), 6000);
+    const t0 = performance.now();
+    const res = await fetch(url, {mode:'cors', cache:'no-store', signal: ctrl.signal});
+    clearTimeout(t);
+    return {status: res.status, latency: Math.round(performance.now()-t0)};
+  }
+
+  async function proxyPing(url){
+    const t0 = performance.now();
+    const res = await withTimeout(
+      fetch('https://api.allorigins.win/get?url=' + encodeURIComponent(url), {cache:'no-store'}),
+      10000
+    );
+    const data = await res.json();
+    const latency = Math.round(performance.now()-t0);
+    const code = data && data.status && data.status.http_code;
+    if(!code) throw new Error('no status');
+    return {status: code, latency};
+  }
+
+  async function doPing(){
+    let url = urlInput.value.trim();
+    if(!url){ subreadout.textContent = 'no url'; return; }
+    if(!/^https?:\/\//i.test(url)) url = 'https://' + url;
+
+    try{
+      const r = await directPing(url);
+      flash(r.status, r.latency, 'direct');
+      return;
+    }catch(e){ /* fall through to proxy */ }
+
+    try{
+      const r = await proxyPing(url);
+      flash(r.status, r.latency, 'proxy');
+      return;
+    }catch(e){
+      flash('neterr', null, null);
+    }
+  }
+
+  function tickFrame(){
+    const dur = PRESETS[presetIdx].ms;
+    const elapsed = performance.now() - cycleStart;
+    const frac = Math.min(elapsed/dur, 1);
+    ring.style.strokeDashoffset = CIRC * (1-frac);
+    if(!currentlyFlashing){
+      const remain = Math.max(dur - elapsed, 0);
+      const s = Math.ceil(remain/1000);
+      const mm = String(Math.floor(s/60)).padStart(2,'0');
+      const ss = String(s%60).padStart(2,'0');
+      subreadout.textContent = mm+':'+ss;
+    }
+    if(running) rafId = requestAnimationFrame(tickFrame);
+  }
+
+  function armCycle(){
+    clearTimeout(timeoutId);
+    cancelAnimationFrame(rafId);
+    cycleStart = performance.now();
+    rafId = requestAnimationFrame(tickFrame);
+    timeoutId = setTimeout(()=>{ doPing(); if(running) armCycle(); }, PRESETS[presetIdx].ms);
+  }
+
+  function start(){
+    running = true;
+    centerGroup.classList.add('running');
+    dialWrap.classList.add('running');
+    ring.classList.add('live');
+    doPing();
+    armCycle();
+  }
+  function stop(){
+    running = false;
+    centerGroup.classList.remove('running');
+    dialWrap.classList.remove('running');
+    ring.classList.remove('live');
+    clearTimeout(timeoutId);
+    cancelAnimationFrame(rafId);
+    ring.style.strokeDashoffset = CIRC;
+    if(!currentlyFlashing){
+      readout.textContent = PRESETS[presetIdx].l;
+      subreadout.textContent = 'idle';
+    }
+  }
+
+  centerBtn.addEventListener('click', ()=>{ running ? stop() : start(); });
+  centerBtn.addEventListener('keydown', (e)=>{
+    if(e.key==='Enter'||e.key===' '){ e.preventDefault(); running?stop():start(); }
+  });
+
+  paintTicks();
+  readout.textContent = PRESETS[presetIdx].l;
+  subreadout.textContent = 'idle';
+})();
+</script>
+</body>
+</html>
